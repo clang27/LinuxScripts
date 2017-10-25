@@ -10,7 +10,7 @@ int main(int argc, char *argv[]){
 	char line[MAXLINE];
 	char longest[MAXLINE];
 	FILE *fp;
-	if (argc == 2){
+	if (argc == 2){//If there is an argument with a file, read file and print longest line
 		if((fp = fopen(argv[1], "r")) == NULL){
 			printf("Can't open %s\n", argv[1]);
 			return 1;
@@ -36,7 +36,7 @@ int main(int argc, char *argv[]){
 		}
 		fclose(fp);
 	}
-	else{
+	else{//If no argument or too many arguments, simply read line from stdin and print longest line
 		printf("Keep entering phrases, and I will pick the longest one. Hit CTRL + D when you are finished.\n");
 		while ((len = getLine(line, MAXLINE)) > 0){
 			if (len > max){
