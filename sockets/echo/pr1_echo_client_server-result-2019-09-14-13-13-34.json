@@ -1,0 +1,44 @@
+{
+    "tests": [
+        {
+            "output": {
+                "client_returncode": 0,
+                "passfail": "passed",
+                "client_console": "gcc -o echoclient -Wall -Werror --std=gnu99 -g3 -fsanitize=address -fno-omit-frame-pointer -Wno-format-security echoclient.c -lpthread -static-libasan\n"
+            },
+            "traceback": "",
+            "description": "Tests that the client compiles"
+        },
+        {
+            "output": {
+                "server_console": "gcc -o echoserver -Wall -Werror --std=gnu99 -g3 -fsanitize=address -fno-omit-frame-pointer -Wno-format-security echoserver.c -lpthread -static-libasan\n",
+                "passfail": "passed",
+                "server_returncode": 0
+            },
+            "traceback": "",
+            "description": "Tests that the server compiles"
+        },
+        {
+            "output": {
+                "client_returncode": 0,
+                "server_console": "",
+                "passfail": "passed",
+                "server_returncode": null,
+                "client_console": ""
+            },
+            "traceback": "",
+            "description": "Tests that the client prints the message sent from the server"
+        },
+        {
+            "output": {
+                "client_returncode": 0,
+                "server_console": "",
+                "passfail": "passed",
+                "server_returncode": null,
+                "client_console": ""
+            },
+            "traceback": "",
+            "description": "Tests that the server echos the message sent from the client"
+        }
+    ]
+}
