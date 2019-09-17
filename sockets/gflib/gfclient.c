@@ -2,23 +2,27 @@
 #include "gfclient-student.h"
 
 struct gfcrequest_t {
+	int cs_fd;
     struct sockaddr_in server_addr;
-    gfstatus_t status;
-    size_t filelen;
-    size_t bytesreceived;
-    
     void *headerarg;
     void (*headerfunc)(void*, size_t, void *);
     void *writearg;
     void (*writefunc)(void*, size_t, void *)
     
+	// Heading of request
     char scheme[8];
     char method[4];
     char *path;
+	
+	// Received
+	gfstatus_t status;
+    size_t filelen;
+    size_t bytesreceived;
 };
     
 
 void gfc_cleanup(gfcrequest_t **gfr){
+	close((*(*gfr)).cs_fd);
     free(*gfr);
 }
 
@@ -53,7 +57,17 @@ void gfc_global_cleanup(){
 }
 
 int gfc_perform(gfcrequest_t **gfr){
-    // currently not implemented.  You fill this part in.
+    // Connect socket to server
+	if (0 > ((*(*gfr)).cs_fd = socket(AF_INET, SOCK_STREAM, 0))) {
+		sprintf(stderr, "Failed to create socket");
+        return -1;
+    }
+    if (0 > connect((*(*gfr)).cs_fd, (struct sockaddr *) &((*(*gfr)).server_addr), sizeof((*(*gfr)).server_addr))) {
+		sprintf(stderr, "Failed to connect socket");
+        close(cs_fd);
+        return -1;
+    } 
+	
     return -1;
 }
 

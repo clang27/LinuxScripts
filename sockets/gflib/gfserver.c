@@ -12,14 +12,16 @@ struct gfserver_t {
 struct gfcontext_t {
     int cs_fd;
     struct sockaddr_in client_addr;
-    gfstatus_t status;
-    char scheme[8];
-    char method[4];
-    size_t filelen;
+	
+	//Heading of response
+	char scheme[8];
+	gfstatus_t status;
+	size_t filelen;
 }
 
 void gfs_abort(gfcontext_t **ctx){
     close((*(*ctx)).cs_fd);
+	free(*ctx);
 }
 
 gfserver_t* gfserver_create(){
@@ -49,29 +51,29 @@ ssize_t gfs_sendheader(gfcontext_t **ctx, gfstatus_t status, size_t file_len){
 }
 
 void gfserver_serve(gfserver_t **gfs){
-    // To-do: Change this to gfcontext stuff
     // Bind the server socket
-    if (bind(ss_fd, (struct sockaddr *) &server, sizeof(server)) < 0) {
+    if (bind((*(*gfs)).ss_fd, (struct sockaddr *) &((*(*gfs)).server), sizeof((*(*gfs)).server)) < 0) {
+		sprintf(stderr, "Failed to bind.");
         exit(1);
     }
 
     // Listen on the server socket for up to some maximum pending connections
-    if (listen(ss_fd, 1) < 0) {
+    if (listen((*(*gfs)).ss_fd, (*(*gfs)).max_pending) < 0) {
+		sprintf(stderr, "Failed to listen.");
         exit(1);
     } 
 
-    while (1) { // Continuous listen
-        // Accept a new client
-        cs_fd = accept(ss_fd, (struct sockaddr *) &client, &client_addr_len);
-         
-        // Sending file data
-        fp = fopen(filename, "r");
-        while((data_amount_sent = fread(buffer, 1, BUFSIZE, fp)) > 0) {
-            send(cs_fd, buffer, data_amount_sent, 0);
-        }
-
-        fclose(fp);
-        close(cs_fd);
+    while (1) { // Continuous listen and accept a new client
+		struct gfcontext_t *gfc = (struct gfcontext_t *) malloc(sizeof(struct gfcontext_t));
+		socklen_t client_addr_len = sizeof((*gfc).client_addr);
+        (*gfc).cs_fd = accept((*(*gfs)).ss_fd, (struct sockaddr *) &((*gfc).client_addr), &client_addr_len);
+		// Receive scheme, method, and path of request
+		// Try to retrieve path content, and if success/failure update gfstatus_t.
+		// Send header of response back to client.
+		// If a successful gfstatus_t was in header, send path content.
+		
+        close((*gfc).cs_fd);
+		free(gfc);
     }
 }
 
