@@ -16,4 +16,6 @@
 #include <sys/stat.h>
 #include <netinet/in.h>
 
- #endif // __GF_STUDENT_H__
+#define MAX_REQUEST_LEN 128
+
+#endif // __GF_STUDENT_H__

@@ -6,8 +6,6 @@
  * protocol.
  */
 
-#define MAX_REQUEST_LEN 128
-
 typedef int gfstatus_t;
 
 #define  GF_OK 200

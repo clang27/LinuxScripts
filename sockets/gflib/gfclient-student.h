@@ -7,4 +7,5 @@
  #include "gfclient.h"
  #include "gf-student.h"
  
+ #define RESPONSE_BUFSIZE 8192
  #endif // __GF_CLIENT_STUDENT_H__

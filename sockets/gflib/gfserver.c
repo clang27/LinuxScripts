@@ -11,143 +11,201 @@ struct gfserver_t {
 
 struct gfcontext_t {
     int cs_fd;
+    int flag;
     struct sockaddr_in client_addr;
-	char request_header[256];
-}
+    socklen_t client_addr_len;
+	char request_header[MAX_REQUEST_LEN];
+};
 
-/* 
- * This function must be the first one called as part of 
- * setting up a server.  It returns a gfserver_t handle which should be
- * passed into all subsequent library calls of the form gfserver_*.  It
- * is not needed for the gfs_* call which are intended to be called from
- * the handler callback.
- */
-gfserver_t* gfserver_create(){
+gfserver_t *gfserver_create(){
     struct gfserver_t *gfs = (struct gfserver_t *) malloc(sizeof(struct gfserver_t));
     (*gfs).flag = 1;
     (*gfs).ss_fd = socket(AF_INET, SOCK_STREAM, 0);
     
     if ((*gfs).ss_fd < 0) {
-        sprintf(stderr, "Failed to create socket");
+        fprintf(stderr, "Failed to create socket.\n");
+        fflush(stderr);
         exit(1);
     }
     
     bzero(&((*gfs).server_addr), sizeof((*gfs).server_addr));
     (*gfs).server_addr.sin_family = AF_INET;
     (*gfs).server_addr.sin_addr.s_addr = INADDR_ANY;
-    setsockopt((*gfs).ss_fd, SOL_SOCKET, SO_REUSEADDR, &((*gfs).flag), sizeof((*gfs).flag));
+    setsockopt((*gfs).ss_fd, SOL_SOCKET, SO_REUSEADDR, &((*gfs).flag), sizeof(int));
     
     return gfs;
 }
 
-/*
- * Sends size bytes starting at the pointer data to the client 
- * This function should only be called from within a callback registered 
- * with gfserver_set_handler.  It returns once the data has been
- * sent.
- */
 ssize_t gfs_send(gfcontext_t **ctx, const void *data, size_t len){
+    fprintf(stdout, "Sending %ld amount of data.\n", len);
+    fflush(stdout);
     return send((*(*ctx)).cs_fd, data, len, 0); 
 }
 
-/*
- * Sends to the client the Getfile header containing the appropriate 
- * status and file length for the given inputs.  This function should
- * only be called from within a callback registered gfserver_set_handler.
- */
 ssize_t gfs_sendheader(gfcontext_t **ctx, gfstatus_t status, size_t file_len){
-	char buffer[256];
-	sprintf(buffer, "GETFILE %d %d \r\n\r\n", status, file_len);
+	char buffer[MAX_REQUEST_LEN];
+	const char *strstatus = NULL;
+
+    switch (status) {
+        default: {
+            strstatus = "UNKNOWN";
+        }
+        break;
+
+        case GF_INVALID: {
+            strstatus = "INVALID";
+        }
+        break;
+
+        case GF_FILE_NOT_FOUND: {
+            strstatus = "FILE_NOT_FOUND";
+        }
+        break;
+
+        case GF_ERROR: {
+            strstatus = "ERROR";
+        }
+        break;
+
+        case GF_OK: {
+            strstatus = "OK";
+        }
+        break;
+        
+    }
 	
-	return send((*(*ctx)).cs_fd, buffer, 256, 0); 
+	sprintf(buffer, "GETFILE %s %ld\r\n\r\n", strstatus, file_len);
+	fprintf(stdout, "Sending header: GETFILE %s %ld\\r\\n\\r\\n\n", strstatus, file_len);
+	fflush(stdout);
+	
+	return send((*(*ctx)).cs_fd, buffer, MAX_REQUEST_LEN, 0); 
 }
 
-/*
- * Starts the server.  Does not return.
- */
 void gfserver_serve(gfserver_t **gfs){
     // Bind the server socket
-    if (bind((*(*gfs)).ss_fd, (struct sockaddr *) &((*(*gfs)).server), sizeof((*(*gfs)).server)) < 0) {
-		fprintf(stderr, "Failed to bind.");
+    if (bind((*(*gfs)).ss_fd, (struct sockaddr *) &((*(*gfs)).server_addr), sizeof((*(*gfs)).server_addr)) < 0) {
+		fprintf(stderr, "Failed to bind.\n");
+		fflush(stderr);
         exit(1);
     }
 
     // Listen on the server socket for up to some maximum pending connections
     if (listen((*(*gfs)).ss_fd, (*(*gfs)).max_pending) < 0) {
-		fprintf(stderr, "Failed to listen.");
+		fprintf(stderr, "Failed to listen.\n");
+		fflush(stderr);
         exit(1);
     } 
 
+    char scheme[8];
+	char method[4];
+    char path[128];
+    int i, space_flag, j, gap_counter;
+    char *h;
+	    
     while (1) { // Continuous listen and accept a new client
-		struct gfcontext_t *gfc = (struct gfcontext_t *) malloc(sizeof(struct gfcontext_t));
-		socklen_t client_addr_len = sizeof((*gfc).client_addr);
-        (*gfc).cs_fd = accept((*(*gfs)).ss_fd, (struct sockaddr *) &((*gfc).client_addr), &client_addr_len);		
+		struct gfcontext_t *gfc = (struct gfcontext_t *) malloc(sizeof(struct gfcontext_t) + sizeof(int));
+		(*gfc).flag = 1;
+		//setsockopt((*gfc).cs_fd, SOL_SOCKET, SO_REUSEADDR, &((*gfc).flag), sizeof(int));
+		(*gfc).client_addr_len = sizeof((*gfc).client_addr);
+        (*gfc).cs_fd = accept((*(*gfs)).ss_fd, (struct sockaddr *) &((*gfc).client_addr), &((*gfc).client_addr_len));
+        bzero(&((*gfc).request_header), MAX_REQUEST_LEN);		
 
-		if (0 > recv((*(*gfr)).cs_fd, (*gfc).request_header, 256, 0)) {
-			fprintf(stderr, "Failed to receive request header");
-			exit(1);
-		}
-
-		gfstatus_t status = GF_OK;
-		size_t file_len = 1024;
-		if (gfs_sendheader(&gfc, status, file_len) < 0) {
-			fprintf(stderr, "Failed to send header.");
+		if (0 > recv((*gfc).cs_fd, (*gfc).request_header, MAX_REQUEST_LEN, 0)) {
+			fprintf(stderr, "Failed to receive request header.\n");
+			fflush(stderr);
 			exit(1);
 		}
 		
-		if (status == GF_OK) {
-			size_t message_len = 2048;
-			if (gfs_send(&gfc, data, message_len) < 0) {
-				fprintf(stderr, "Failed to send data");
-				exit(1);
-			}
+        // Reinitialize variables each iteration of loop
+	    h = (*gfc).request_header;
+	    j=0; gap_counter=0; space_flag = 0;
+	    bzero(scheme, 8);
+	    bzero(method, 4);
+	    bzero(path, 128);
+	    
+	    //Same thing as in gfclient, but for all three words in header
+        for (i=0; i<strlen(h); i++) {
+		    if (h[i] == ' ') {
+			    space_flag = 1;
+			    continue;
+		    } 
+		    else {
+			    if (space_flag){
+				    gap_counter++;
+				    space_flag = 0;
+				    if (gap_counter == 0 || gap_counter == 1 || gap_counter == 2){
+					    j = i;
+				    }
+			    }
+			    if (gap_counter == 0) {
+				    scheme[i-j] = h[i];
+				    if (h[i+1] == '\r' || h[i+1] == ' ') {
+					    scheme[i-j+1] = '\0';
+				    }
+			    }
+			    else if (gap_counter == 1) {
+				    method[i-j] = h[i];
+				    if (h[i+1] == '\r' || h[i+1] == ' ') {
+					    method[i-j+1] = '\0';
+				    }
+			    }
+			    else if (gap_counter == 2) {
+				    path[i-j] = h[i];
+				    if (h[i+1] == '\r' || h[i+1] == ' ') {
+					    path[i-j+1] = '\0';
+				    }
+			    }
+		    }
 		}
 		
+		printf("%s", h);
+		for (i=0; i<strlen(path); i++) {
+		    if (path[i] == ' ' || path[i] == '\\' || path[i] == '!' || path[i] == '\n' || path[i] == '\r') {
+                gfs_sendheader(&gfc, GF_INVALID, 0);
+                close((*gfc).cs_fd);
+        		free(gfc);
+                return;
+		    }
+		}
+        if (strcmp(scheme, "GETFILE") == 0 && strcmp(method, "GET") == 0 && strlen(path) > 0) {
+            (*(*gfs)).handler(&gfc, path, (*(*gfs)).arg);
+            
+        } 
+        else if (!(strcmp(scheme, "GETFILE") == 0 && strcmp(method, "GET") == 0)) {
+            gfs_sendheader(&gfc, GF_INVALID, 0);
+        }
+        else {
+            gfs_sendheader(&gfc, GF_FILE_NOT_FOUND, 0);
+        }
+        
         close((*gfc).cs_fd);
 		free(gfc);
     }
+    close((*(*gfs)).ss_fd);
+    free(*gfs);
 }
 
-/*
- * Sets the third argument for calls to the handler callback.
- */
 void gfserver_set_handlerarg(gfserver_t **gfs, void* arg){
-    (*(gfs)).arg = arg;
+    (*(*gfs)).arg = arg;
 }
 
-/*
- * Sets the handler callback, a function that will be called for each each
- * request.  As arguments, this function receives:
- * - a gfcontext_t handle which it must pass into the gfs_* functions that 
- * 	 it calls as it handles the response.
- * - the requested path
- * - the pointer specified in the gfserver_set_handlerarg option.
- * The handler should only return a negative value to signal an error.
- */
 void gfserver_set_handler(gfserver_t **gfs, gfh_error_t (*handler)(gfcontext_t **, const char *, void*)){
-    (*(gfs)).handler = handler;
+    (*(*gfs)).handler = handler;
 }
 
-/*
- * Sets the maximum number of pending connections which the server
- * will tolerate before rejecting connection requests.
- */
+
 void gfserver_set_maxpending(gfserver_t **gfs, int max_npending){
-    (*(gfs)).max_pending = max_npending;
+    (*(*gfs)).max_pending = max_npending;
 }
 
-/*
- * Sets the port at which the server will listen for connections.
- */
 void gfserver_set_port(gfserver_t **gfs, unsigned short port){
     (*(*gfs)).server_addr.sin_port = htons(port);
 }
 
-/*
- * Aborts the connection to the client associated with the input
- * gfcontext_t.
- */
 void gfs_abort(gfcontext_t **ctx){
+    fprintf(stdout, "Aborting!");
+    fflush(stdout);
+    gfs_sendheader(ctx, GF_ERROR, 0);
     close((*(*ctx)).cs_fd);
 	free(*ctx);
 }
