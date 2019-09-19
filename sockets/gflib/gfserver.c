@@ -2,43 +2,25 @@
 
 struct gfserver_t {
     int ss_fd;
-    int flag;
+	unsigned short port;
     int max_pending;
-    struct sockaddr_in server_addr;
+    
     void* arg;
     gfh_error_t (*handler)(gfcontext_t **, const char *, void*);
 };
 
 struct gfcontext_t {
     int cs_fd;
-    int flag;
-    struct sockaddr_in client_addr;
-    socklen_t client_addr_len;
-	char request_header[MAX_REQUEST_LEN];
+	gfstatus_t status;
+	char request[MAX_REQUEST_LEN];
 };
 
-gfserver_t *gfserver_create(){
-    struct gfserver_t *gfs = (struct gfserver_t *) malloc(sizeof(struct gfserver_t));
-    (*gfs).flag = 1;
-    (*gfs).ss_fd = socket(AF_INET, SOCK_STREAM, 0);
-    
-    if ((*gfs).ss_fd < 0) {
-        fprintf(stderr, "Failed to create socket.\n");
-        fflush(stderr);
-        exit(1);
-    }
-    
-    bzero(&((*gfs).server_addr), sizeof((*gfs).server_addr));
-    (*gfs).server_addr.sin_family = AF_INET;
-    (*gfs).server_addr.sin_addr.s_addr = INADDR_ANY;
-    setsockopt((*gfs).ss_fd, SOL_SOCKET, SO_REUSEADDR, &((*gfs).flag), sizeof(int));
-    
-    return gfs;
+gfserver_t *gfserver_create(){    
+    return (struct gfserver_t *) malloc(sizeof(struct gfserver_t));
 }
 
 ssize_t gfs_send(gfcontext_t **ctx, const void *data, size_t len){
     fprintf(stdout, "Sending %ld amount of data.\n", len);
-    fflush(stdout);
     return send((*(*ctx)).cs_fd, data, len, 0); 
 }
 
@@ -82,50 +64,53 @@ ssize_t gfs_sendheader(gfcontext_t **ctx, gfstatus_t status, size_t file_len){
 }
 
 void gfserver_serve(gfserver_t **gfs){
+	struct sockaddr_in server_addr;
+	int flag = 1;
+	(*(*gfs)).ss_fd = socket(AF_INET, SOCK_STREAM, 0);
+	bzero(&server_addr, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+	server_addr.sin_port = htons((*(*gfs)).port);
+    setsockopt((*(*gfs)).ss_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
+	
     // Bind the server socket
-    if (bind((*(*gfs)).ss_fd, (struct sockaddr *) &((*(*gfs)).server_addr), sizeof((*(*gfs)).server_addr)) < 0) {
+    if (bind((*(*gfs)).ss_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0) {
 		fprintf(stderr, "Failed to bind.\n");
-		fflush(stderr);
         exit(1);
     }
 
     // Listen on the server socket for up to some maximum pending connections
     if (listen((*(*gfs)).ss_fd, (*(*gfs)).max_pending) < 0) {
 		fprintf(stderr, "Failed to listen.\n");
-		fflush(stderr);
         exit(1);
     } 
 
+	struct gfcontext_t *gfc = (struct gfcontext_t *) malloc(sizeof(struct gfcontext_t));
+	struct sockaddr_in client_addr;
+	socklen_t client_addr_len = sizeof(client_addr);
     char scheme[8];
 	char method[4];
     char path[128];
     int i, space_flag, j, gap_counter;
-    char *h;
 	    
     while (1) { // Continuous listen and accept a new client
-		struct gfcontext_t *gfc = (struct gfcontext_t *) malloc(sizeof(struct gfcontext_t) + sizeof(int));
-		(*gfc).flag = 1;
-		//setsockopt((*gfc).cs_fd, SOL_SOCKET, SO_REUSEADDR, &((*gfc).flag), sizeof(int));
-		(*gfc).client_addr_len = sizeof((*gfc).client_addr);
-        (*gfc).cs_fd = accept((*(*gfs)).ss_fd, (struct sockaddr *) &((*gfc).client_addr), &((*gfc).client_addr_len));
-        bzero(&((*gfc).request_header), MAX_REQUEST_LEN);		
+		// Reinitialize variables each iteration of loop
+		(*gfc).cs_fd = 0;
+		bzero(&client_addr, sizeof(client_addr));
+		bzero((*gfc).request, MAX_REQUEST_LEN);
+		bzero(scheme, 8); bzero(method, 4); bzero(path, 128);
+		space_flag = 0; j=0; gap_counter=0; 
+		
+        (*gfc).cs_fd = accept((*(*gfs)).ss_fd, (struct sockaddr *) &client_addr, &client_addr_len);     		
 
-		if (0 > recv((*gfc).cs_fd, (*gfc).request_header, MAX_REQUEST_LEN, 0)) {
+		if (0 > recv((*gfc).cs_fd, (*gfc).request, MAX_REQUEST_LEN, 0)) {
 			fprintf(stderr, "Failed to receive request header.\n");
-			fflush(stderr);
 			exit(1);
 		}
 		
-        // Reinitialize variables each iteration of loop
-	    h = (*gfc).request_header;
-	    j=0; gap_counter=0; space_flag = 0;
-	    bzero(scheme, 8);
-	    bzero(method, 4);
-	    bzero(path, 128);
-	    
 	    //Same thing as in gfclient, but for all three words in header
-        for (i=0; i<strlen(h); i++) {
-		    if (h[i] == ' ') {
+        for (i=0; i<strlen((*gfc).request); i++) {
+		    if ((*gfc).request[i] == ' ') {
 			    space_flag = 1;
 			    continue;
 		    } 
@@ -138,33 +123,30 @@ void gfserver_serve(gfserver_t **gfs){
 				    }
 			    }
 			    if (gap_counter == 0) {
-				    scheme[i-j] = h[i];
-				    if (h[i+1] == '\r' || h[i+1] == ' ') {
+				    scheme[i-j] = (*gfc).request[i];
+				    if ((*gfc).request[i+1] == '\r' || (*gfc).request[i+1] == ' ') {
 					    scheme[i-j+1] = '\0';
 				    }
 			    }
 			    else if (gap_counter == 1) {
-				    method[i-j] = h[i];
-				    if (h[i+1] == '\r' || h[i+1] == ' ') {
+				    method[i-j] = (*gfc).request[i];
+				    if ((*gfc).request[i+1] == '\r' || (*gfc).request[i+1] == ' ') {
 					    method[i-j+1] = '\0';
 				    }
 			    }
 			    else if (gap_counter == 2) {
-				    path[i-j] = h[i];
-				    if (h[i+1] == '\r' || h[i+1] == ' ') {
+				    path[i-j] = (*gfc).request[i];
+				    if ((*gfc).request[i+1] == '\r' || (*gfc).request[i+1] == ' ') {
 					    path[i-j+1] = '\0';
 				    }
 			    }
 		    }
 		}
 		
-		printf("%s", h);
+		printf("%s", (*gfc).request);
 		for (i=0; i<strlen(path); i++) {
 		    if (path[i] == ' ' || path[i] == '\\' || path[i] == '!' || path[i] == '\n' || path[i] == '\r') {
-                gfs_sendheader(&gfc, GF_INVALID, 0);
-                close((*gfc).cs_fd);
-        		free(gfc);
-                return;
+                (*gfc).status = GF_INVALID;
 		    }
 		}
         if (strcmp(scheme, "GETFILE") == 0 && strcmp(method, "GET") == 0 && strlen(path) > 0) {
@@ -172,17 +154,17 @@ void gfserver_serve(gfserver_t **gfs){
             
         } 
         else if (!(strcmp(scheme, "GETFILE") == 0 && strcmp(method, "GET") == 0)) {
-            gfs_sendheader(&gfc, GF_INVALID, 0);
+            (*gfc).status = GF_INVALID;
         }
-        else {
-            gfs_sendheader(&gfc, GF_FILE_NOT_FOUND, 0);
+        else if ((*gfc).status != GF_INVALID) {
+            (*gfc).status = GF_FILE_NOT_FOUND;
         }
         
+		gfs_sendheader(&gfc, (*gfc).status, 0);
         close((*gfc).cs_fd);
-		free(gfc);
     }
+	free(gfc);
     close((*(*gfs)).ss_fd);
-    free(*gfs);
 }
 
 void gfserver_set_handlerarg(gfserver_t **gfs, void* arg){
@@ -199,7 +181,7 @@ void gfserver_set_maxpending(gfserver_t **gfs, int max_npending){
 }
 
 void gfserver_set_port(gfserver_t **gfs, unsigned short port){
-    (*(*gfs)).server_addr.sin_port = htons(port);
+    (*(*gfs)).port = port;
 }
 
 void gfs_abort(gfcontext_t **ctx){

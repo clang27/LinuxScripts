@@ -3,7 +3,9 @@
 
 struct gfcrequest_t {
 	int cs_fd;
-    struct sockaddr_in server_addr;
+    const char *server;
+	unsigned short port;
+	
     void *headerarg;
     void (*headerfunc)(void*, size_t, void *);
     void *writearg;
@@ -14,9 +16,7 @@ struct gfcrequest_t {
     char *method;
     const char *path;
 	
-	char response_header[MAX_REQUEST_LEN];
-	char response_body[RESPONSE_BUFSIZE];
-	size_t bytes_received;
+	char response[RESPONSE_BUFSIZE];
 };
 
 gfcrequest_t *gfc_create(){
@@ -24,7 +24,6 @@ gfcrequest_t *gfc_create(){
     // Default values of request
     (*gfr).scheme = "GETFILE";
     (*gfr).method = "GET";
-    (*gfr).bytes_received = 0;
     
     return gfr;
 }
@@ -37,7 +36,7 @@ gfstatus_t gfc_get_status(gfcrequest_t **gfr){
 	int j = 0;
 	unsigned short gap_counter = 0;
 	int space_flag = 0;
-	char *h = (*(*gfr)).response_header;
+	char *h = (*(*gfr)).response;
 	
 	for (i=0; i<strlen(h); i++) {
 		if (h[i] == ' ') {
@@ -79,7 +78,7 @@ gfstatus_t gfc_get_status(gfcrequest_t **gfr){
 	else if (strcmp(str_status, "ERROR") == 0) {
     	status = GF_ERROR;
 	}
-	
+
     return status;
 }
 
@@ -90,7 +89,7 @@ size_t gfc_get_filelen(gfcrequest_t **gfr){
 	int j = 0;
 	unsigned short gap_counter = 0;
 	int space_flag = 0;
-	char *h = (*(*gfr)).response_header;
+	char *h = (*(*gfr)).response;
 	
 	for (i=0; i<strlen(h); i++) {
 		if (h[i] == ' ') {
@@ -125,47 +124,67 @@ size_t gfc_get_filelen(gfcrequest_t **gfr){
 }
 
 size_t gfc_get_bytesreceived(gfcrequest_t **gfr){
-    return (*(*gfr)).bytes_received;
+	int i;
+	char *h = (*(*gfr)).response;
+	size_t bytes_received = 0;
+	unsigned short found_end_of_header = 0;
+	
+	for (i=0; i<strlen(h); i++) {
+		if (h[i] == '\r' && h[i++] == '\n' && h[i++] == '\r' && h[i++] == '\n') {
+			found_end_of_header = 1;
+		} 
+		else if (found_end_of_header && h[i] != 0) {
+			bytes_received++;
+		}
+	}
+	
+    return bytes_received;
 }
 
 int gfc_perform(gfcrequest_t **gfr){
+	struct sockaddr_in server_addr;
+	struct hostent *server_host_info = gethostbyname((*(*gfr)).server);
+    unsigned long server_addr_nbo = *(unsigned long *)((*server_host_info).h_addr_list[0]);
+    
+    bzero(&server_addr, sizeof(server_addr));
+    server_addr.sin_addr.s_addr = server_addr_nbo;
+    server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons((*(*gfr)).port);
+	
     // Connect socket to server
 	if (0 > ((*(*gfr)).cs_fd = socket(AF_INET, SOCK_STREAM, 0))) {
 		fprintf(stderr, "Failed to create socket\n");
 		fflush(stderr);
         return -1;
     }
-    if (0 > connect((*(*gfr)).cs_fd, (struct sockaddr *) &((*(*gfr)).server_addr), sizeof((*(*gfr)).server_addr))) {
+    if (0 > connect((*(*gfr)).cs_fd, (struct sockaddr *) &server_addr, sizeof(server_addr))) {
 		fprintf(stderr, "Failed to connect socket\n");
 		fflush(stderr);
         close((*(*gfr)).cs_fd);
         return -1;
     } 
+	
 	//Send request
 	char request[MAX_REQUEST_LEN] = "";
-	strcat(request, (*(*gfr)).scheme);
-	strcat(request, " ");
-	strcat(request, (*(*gfr)).method);
-	strcat(request, " ");
-	strcat(request, (*(*gfr)).path);
-	strcat(request, " \r\n\r\n");
-	send((*(*gfr)).cs_fd, request, MAX_REQUEST_LEN, 0);
+	strcat(request, (*(*gfr)).scheme); strcat(request, " ");	
+	strcat(request, (*(*gfr)).method); strcat(request, " ");
+	strcat(request, (*(*gfr)).path); strcat(request, " \r\n\r\n");
 	
+	send((*(*gfr)).cs_fd, request, MAX_REQUEST_LEN, 0);
 	//Receive header response
-	bzero(&((*(*gfr)).response_header), MAX_REQUEST_LEN);		
-	recv((*(*gfr)).cs_fd, (*(*gfr)).response_header, MAX_REQUEST_LEN, 0);
+	bzero(&((*(*gfr)).response), RESPONSE_BUFSIZE);	
+	recv((*(*gfr)).cs_fd, (*(*gfr)).response, MAX_REQUEST_LEN, 0);	
 	
 	//Receive body response and callback
 	if (gfc_get_status(gfr) == GF_OK) {
 		size_t len = gfc_get_filelen(gfr);
-		size_t amount_received = 0;
-		bzero(&((*(*gfr)).response_body), RESPONSE_BUFSIZE);		
-		while ((*(*gfr)).bytes_received < len) {
-    		amount_received = recv((*(*gfr)).cs_fd, (*(*gfr)).response_body, RESPONSE_BUFSIZE, 0);
-		    (*(*gfr)).bytes_received += amount_received;
-			fprintf(stdout, "Received %ld of %ld bytes \n", (*(*gfr)).bytes_received, len);
+		size_t amount_received = 0;	
+		size_t bytes_received = 0;
+		while ((bytes_received = gfc_get_bytesreceived(gfr)) < len) {
+    		amount_received = recv((*(*gfr)).cs_fd, (*(*gfr)).response, RESPONSE_BUFSIZE, 0);
+			fprintf(stdout, "Received %ld bytes \n", bytes_received);
 			fflush(stdout);
-			(*(*(*gfr)).writefunc)((*(*gfr)).response_body, amount_received, (*(*gfr)).writearg);
+			(*(*(*gfr)).writefunc)((*(*gfr)).response, amount_received, (*(*gfr)).writearg);
 		}
 		return 0;
 	}
@@ -192,16 +211,11 @@ void gfc_set_path(gfcrequest_t **gfr, const char* path){
 }
 
 void gfc_set_port(gfcrequest_t **gfr, unsigned short port){
-    (*(*gfr)).server_addr.sin_port = htons(port);
+    (*(*gfr)).port = port;
 }
 
 void gfc_set_server(gfcrequest_t **gfr, const char* server){
-    struct hostent *server_host_info = gethostbyname(server);
-    unsigned long server_addr_nbo = *(unsigned long *)((*server_host_info).h_addr_list[0]);
-    
-    bzero(&((*(*gfr)).server_addr), sizeof((*(*gfr)).server_addr));
-    (*(*gfr)).server_addr.sin_addr.s_addr = server_addr_nbo;
-    (*(*gfr)).server_addr.sin_family = AF_INET;
+	(*(*gfr)).server = server;
 }
 
 void gfc_set_writearg(gfcrequest_t **gfr, void *writearg){
